@@ -39,17 +39,19 @@
   ---- OPTIONS -----------------------------------------------------------
   See the CONFIG block in the script at the bottom.
 
-  ---- GOING FULLY OFFLINE ----------------------------------------------
-  The page-flip engine is already embedded in this file. The PDF renderer
-  (Mozilla's pdf.js) still loads from a CDN. To remove that dependency,
-  download these two files next to this one:
+  ---- FILES THIS NEEDS BESIDE IT ---------------------------------------
+  The page-flip and QR engines are embedded in this file. The PDF renderer
+  (Mozilla's pdf.js) is not — it's too big — so upload these two alongside:
 
-      https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js
-      https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js
+      pdf.min.js
+      pdf.worker.min.js
 
-  then change PDFJS_LIB and PDFJS_WORKER in CONFIG to "pdf.min.js" and
-  "pdf.worker.min.js". Same for the two Google Fonts <link> tags — remove
-  them and the type falls back to system faces.
+  If they're missing, the reader falls back to the copies on cdnjs, which
+  works from home but is commonly blocked on school networks. Keeping the
+  local pair is what makes this reliable behind a filter.
+
+  The two Google Fonts <link> tags are the last external request. Remove
+  them if you want zero outside calls; the type falls back to system faces.
 
   Bundled: StPageFlip 2.0.7 (MIT) — github.com/Nodlik/StPageFlip
            pdf.js (Apache 2.0) — mozilla.github.io/pdf.js
@@ -429,8 +431,16 @@ const CONFIG = {
   renderScale: 1.7,    // higher = crisper pages, slower load, more memory
   maxPixels:   2.6e6,  // per-page ceiling so big decks don't stall phones
   jpegQuality: 0.88,
-  PDFJS_LIB:    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
-  PDFJS_WORKER: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"
+
+  // Where to find Mozilla's pdf.js, tried in order until one loads.
+  // Local first: school content filters often block public CDNs, and files
+  // sitting beside this one are same-origin so they always get through.
+  PDFJS: [
+    { lib: "pdf.min.js",
+      worker: "pdf.worker.min.js" },
+    { lib: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
+      worker: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js" }
+  ]
 };
 /* ====================================================================== */
 
@@ -462,20 +472,30 @@ function fail(title, body){
 }
 
 /* --- load pdf.js on demand -------------------------------------------- */
-function loadPdfJs(){
-  if (pdfjs) return Promise.resolve(pdfjs);
+function addScript(src){
   return new Promise((res, rej) => {
     const s = document.createElement("script");
-    s.src = CONFIG.PDFJS_LIB;
-    s.onload = () => {
-      pdfjs = window.pdfjsLib;
-      if (!pdfjs) return rej(new Error("pdfjsLib missing"));
-      pdfjs.GlobalWorkerOptions.workerSrc = CONFIG.PDFJS_WORKER;
-      res(pdfjs);
-    };
-    s.onerror = () => rej(new Error("network"));
+    s.src = src;
+    s.onload = res;
+    s.onerror = () => rej(new Error("blocked or missing: " + src));
     document.head.appendChild(s);
   });
+}
+
+async function loadPdfJs(){
+  if (pdfjs) return pdfjs;
+  for (const src of CONFIG.PDFJS){
+    try {
+      await addScript(src.lib);
+      if (!window.pdfjsLib) continue;
+      pdfjs = window.pdfjsLib;
+      pdfjs.GlobalWorkerOptions.workerSrc = src.worker;
+      return pdfjs;
+    } catch (e){
+      console.warn(e.message);   // try the next source
+    }
+  }
+  throw new Error("no pdf.js source reachable");
 }
 
 /* --- open ------------------------------------------------------------- */
@@ -516,7 +536,7 @@ async function build(buffer){
   try { lib = await loadPdfJs(); }
   catch(e){
     return fail("The PDF engine didn't load",
-      "This page needs pdf.js. If you're offline or behind a filter, download it beside this file and update <code>CONFIG</code> — see the comment at the top of the source.");
+      "This page needs <code>pdf.min.js</code> and <code>pdf.worker.min.js</code>. Upload both beside this file — a school network filter will usually block the copies on the public CDN.");
   }
 
   let pdf;
